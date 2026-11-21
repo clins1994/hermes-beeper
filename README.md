@@ -24,8 +24,8 @@ Read this before you install:
 
 ```bash
 hermes plugins install beeper-platform        # from the Hermes plugin catalog
-# or straight from GitHub:
-hermes plugins install clins1994/hermes-beeper
+# or straight from GitHub (the plugin lives in the beeper/ folder):
+hermes plugins install https://github.com/clins1994/hermes-beeper#beeper
 hermes plugins enable beeper-platform
 ```
 
