@@ -4,9 +4,9 @@ A [Hermes Agent](https://github.com/NousResearch/hermes-agent) gateway platform 
 
 Replies are posted **from your own account**, with a marker (🤖 by default) so that people can tell the agent from you.
 
-![A Messenger group: the message "!wolf who is hozier?" and the agent's reply, which starts with a wolf emoji](docs/screenshot.jpg)
+![A Messenger chat: a message that starts with the trigger "!wolf" and the agent's reply, which starts with the reply marker 🐺](docs/screenshot.jpg)
 
-A Messenger group with the trigger `!wolf`, the reply marker 🐺 and a lowercase persona.
+An example setup: a Messenger group with the trigger set to `!wolf` and the reply marker set to 🐺. The trigger, the marker and the agent's persona are all yours to choose.
 
 ## Disclosure
 

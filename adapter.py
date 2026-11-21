@@ -19,8 +19,8 @@ import json
 import logging
 import os
 from dataclasses import dataclass
-from datetime import datetime, timezone, UTC
-from typing import TYPE_CHECKING, Any, Optional
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING, Any
 
 from gateway.config import Platform, PlatformConfig
 from gateway.platforms._shared import get_scoped_secret
@@ -45,11 +45,11 @@ MAX_TEXT_LENGTH = 4000
 _BACKFILL_MAX_PAGES = 5
 _RECONNECT_MAX_SECONDS = 30.0
 
-PLATFORM_HINT = (
+PLATFORM_HINT = (  # facts about the channel only: tone, length and persona belong to the user's SOUL.md
     "You are replying inside the owner's personal chats through Beeper (WhatsApp, Signal, Telegram, "
-    "LINE, iMessage and other networks), posting from the owner's own account. Every message you send "
-    "is prefixed with a marker so people know it is the agent and not the owner. Write plain text: "
-    "most networks do not render Markdown. Keep replies short and conversational."
+    "LINE, iMessage and other networks), posting from the owner's own account. The configured reply "
+    "marker is added to the start of every message you send, so do not write it yourself. Most of "
+    "these networks show Markdown as raw text."
 )
 
 
@@ -66,10 +66,10 @@ class BeeperAdapter(OwnAccessPolicyMixin, BasePlatformAdapter):
     splits_long_messages = True
     serial_receive_loop = True
 
-    def __init__(self, config: PlatformConfig, *, client: Optional[BeeperClient] = None,
+    def __init__(self, config: PlatformConfig, *, client: BeeperClient | None = None,
                  ws_connect: Any = None) -> None:
         super().__init__(config, Platform("beeper"))
-        self._config_error: Optional[str] = None
+        self._config_error: str | None = None
         try:
             self.settings: BeeperSettings = parse_settings(config.extra or {})
         except BeeperConfigError as exc:
@@ -83,8 +83,8 @@ class BeeperAdapter(OwnAccessPolicyMixin, BasePlatformAdapter):
                                breaker=ReplyBreaker(self.settings.rate_limits))
         self._pacer = SendPacer(self.settings.rate_limits)
         self._sleep = asyncio.sleep
-        self._ws_task: Optional[asyncio.Task] = None
-        self._last_seq: Optional[int] = None
+        self._ws_task: asyncio.Task | None = None
+        self._last_seq: int | None = None
         self._closing = False
         self._dry_run_count = 0
         # Own-access-policy contract (access_policy_mixin): the adapter gates every chat itself.
@@ -126,7 +126,7 @@ class BeeperAdapter(OwnAccessPolicyMixin, BasePlatformAdapter):
         extra.setdefault("group_allow_admin_from", [self._own_id])
         self.config = dataclasses.replace(self.config, extra=extra)
 
-    def toolsets_for_source(self, source: SessionSource) -> Optional[list[str]]:
+    def toolsets_for_source(self, source: SessionSource) -> list[str] | None:
         active = self._chats.get(source.chat_id or "")
         return list(active.rule.toolsets) if active and active.rule.toolsets is not None else None
 
@@ -145,7 +145,6 @@ class BeeperAdapter(OwnAccessPolicyMixin, BasePlatformAdapter):
                               "(Settings → Developers) into the profile's .env.", retryable=False)
         if self._client is None:
             import httpx
-
             from gateway.platforms._http_client_limits import platform_httpx_limits
             self._client = BeeperClient(self.settings.base_url, self._token, http=httpx.AsyncClient(
                 timeout=httpx.Timeout(30.0, connect=5.0), limits=platform_httpx_limits()))
@@ -351,8 +350,8 @@ class BeeperAdapter(OwnAccessPolicyMixin, BasePlatformAdapter):
 
     # --- outbound --------------------------------------------------------------------------
 
-    async def send(self, chat_id: str, content: str, reply_to: Optional[str] = None,
-                   metadata: Optional[dict[str, Any]] = None) -> SendResult:
+    async def send(self, chat_id: str, content: str, reply_to: str | None = None,
+                   metadata: dict[str, Any] | None = None) -> SendResult:
         active = self._chats.get(chat_id) or next(
             (c for c in self._chats.values() if chat_id in (c.info.local_id, c.rule.chat_key)), None)
         if active is None:
@@ -369,7 +368,7 @@ class BeeperAdapter(OwnAccessPolicyMixin, BasePlatformAdapter):
                 return result
         return result
 
-    async def _send_chunk(self, active: ActiveChat, text: str, reply_to: Optional[str]) -> SendResult:
+    async def _send_chunk(self, active: ActiveChat, text: str, reply_to: str | None) -> SendResult:
         chat_id = active.info.id
         self.gate.breaker.record(chat_id)
         if self.settings.dry_run:
@@ -383,7 +382,7 @@ class BeeperAdapter(OwnAccessPolicyMixin, BasePlatformAdapter):
         self.gate.note_sent(pending_id)
         return SendResult(success=True, message_id=pending_id)
 
-    def _dry_run_send(self, active: ActiveChat, text: str, reply_to: Optional[str]) -> SendResult:
+    def _dry_run_send(self, active: ActiveChat, text: str, reply_to: str | None) -> SendResult:
         """Record what would be sent in a private file instead of sending (dry_run: true)."""
         self._dry_run_count += 1
         message_id = f"dry-run-{self._dry_run_count}"
@@ -433,15 +432,15 @@ class BeeperAdapter(OwnAccessPolicyMixin, BasePlatformAdapter):
         except BeeperApiError as exc:
             logger.warning("[beeper] could not remove processing reaction in chat %s: %s", hash_for_log(key[0]), exc)
 
-    async def send_private_notice(self, chat_id: str, user_id: Optional[str], content: str,
-                                  reply_to: Optional[str] = None,
-                                  metadata: Optional[dict[str, Any]] = None) -> SendResult:
+    async def send_private_notice(self, chat_id: str, user_id: str | None, content: str,
+                                  reply_to: str | None = None,
+                                  metadata: dict[str, Any] | None = None) -> SendResult:
         """Beeper has no private side channel: gateway notices are logged, never posted into a chat."""
         logger.info("[beeper] gateway notice for chat %s not posted (%d chars): %s", hash_for_log(chat_id),
                     len(content), content.splitlines()[0][:120] if content else "")
         return SendResult(success=True)
 
-    async def send_typing(self, chat_id: str, metadata: Optional[dict[str, Any]] = None) -> None:
+    async def send_typing(self, chat_id: str, metadata: dict[str, Any] | None = None) -> None:
         """No typing indicator: it would show friends that the owner is typing."""
 
     async def get_chat_info(self, chat_id: str) -> dict[str, Any]:
@@ -460,10 +459,8 @@ def _sort_value(sort_key: str) -> tuple[int, str]:
 
 
 def check_requirements() -> bool:
-    try:
-        import httpx
-        import websockets
-    except ImportError:
+    import importlib.util
+    if not all(importlib.util.find_spec(mod) for mod in ("httpx", "websockets")):
         return False
     return bool(str(get_scoped_secret(TOKEN_ENV, "") or "").strip())
 

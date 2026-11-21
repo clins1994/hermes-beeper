@@ -1,10 +1,8 @@
 """Intake gate: trigger, invokers and every loop-prevention layer, on synthetic and recorded traffic."""
 
 import pytest
-
 from beeper_platform.config import RateLimits, parse_settings
 from beeper_platform.gate import Admit, Drop, IntakeGate, ReplyBreaker, strip_trigger
-
 
 
 class _Clock:

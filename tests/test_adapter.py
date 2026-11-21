@@ -5,17 +5,16 @@ The Desktop API is replaced by an in-memory client and WebSocket; no network, no
 
 import asyncio
 import json
-from datetime import datetime, timedelta, timezone, UTC
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock
 
 import pytest
-
-from gateway.config import PlatformConfig
+from _waiting import async_wait_until
 from beeper_platform import cursors as cursor_store
 from beeper_platform.adapter import BeeperAdapter, register
 from beeper_platform.client import BeeperApiError, ChatInfo, MessagePage
 from beeper_platform.events import BeeperMessage
-from _waiting import async_wait_until
+from gateway.config import PlatformConfig
 
 NOTES = ChatInfo(id="!notes:beeper.local", local_id="101", title="Notes", network="Signal", chat_type="single")
 FRIENDS = ChatInfo(id="!friends:beeper.local", local_id="77", title="Friends", network="WhatsApp", chat_type="group")

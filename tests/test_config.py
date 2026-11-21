@@ -1,9 +1,13 @@
 """Beeper settings parsing: deny-by-default and loud failures on settings that change who is answered."""
 
 import pytest
-
 from beeper_platform.config import (
-    ANY_INVOKER, DEFAULT_BASE_URL, DEFAULT_REPLY_MARKER, DEFAULT_TRIGGER, SELF_INVOKER, BeeperConfigError,
+    ANY_INVOKER,
+    DEFAULT_BASE_URL,
+    DEFAULT_REPLY_MARKER,
+    DEFAULT_TRIGGER,
+    SELF_INVOKER,
+    BeeperConfigError,
     parse_settings,
 )
 
