@@ -19,7 +19,8 @@ _HERMES = Path(os.environ.get("HERMES_AGENT_REPO", Path.home() / ".hermes" / "he
 if not (_HERMES / "gateway" / "platforms" / "base.py").exists():
     raise pytest.UsageError(f"hermes-agent checkout not found at {_HERMES}; set HERMES_AGENT_REPO")
 sys.path.insert(0, str(_HERMES))
-_PLUGIN = Path(__file__).resolve().parent.parent / "beeper"
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # tests/_waiting.py
+_PLUGIN = Path(__file__).resolve().parent.parent  # the repo root is the plugin
 _spec = importlib.util.spec_from_file_location("beeper_platform", _PLUGIN / "__init__.py",
                                                submodule_search_locations=[str(_PLUGIN)])
 assert _spec is not None and _spec.loader is not None

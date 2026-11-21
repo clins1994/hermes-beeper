@@ -4,9 +4,9 @@ A [Hermes Agent](https://github.com/NousResearch/hermes-agent) gateway platform 
 
 Replies are posted **from your own account**, with a marker (🤖 by default) so that people can tell the agent from you.
 
-<p align="center"><img src="docs/screenshot.jpg" width="420" alt="A Messenger chat: the message '!wolf who is hozier?' and the agent's reply, which starts with a wolf emoji"></p>
+![A Messenger group: the message "!wolf who is hozier?" and the agent's reply, which starts with a wolf emoji](docs/screenshot.jpg)
 
-<p align="center"><sub>A Messenger group with the trigger <code>!wolf</code>, reply marker 🐺 and a lowercase persona.</sub></p>
+A Messenger group with the trigger `!wolf`, the reply marker 🐺 and a lowercase persona.
 
 ## Disclosure
 
@@ -28,8 +28,8 @@ Read this before you install:
 
 ```bash
 hermes plugins install beeper-platform        # from the Hermes plugin catalog
-# or straight from GitHub (the plugin lives in the beeper/ folder):
-hermes plugins install https://github.com/clins1994/hermes-beeper#beeper
+# or straight from GitHub:
+hermes plugins install clins1994/hermes-beeper
 hermes plugins enable beeper-platform
 ```
 
