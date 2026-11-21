@@ -1,0 +1,24 @@
+name: beeper-platform
+label: Beeper
+kind: platform
+version: 0.1.0
+requires_hermes: ">=0.23.3"
+description: >
+  Beeper Desktop API gateway adapter for Hermes Agent. Brings Hermes into the
+  owner's own chats on every network Beeper Desktop connects (WhatsApp, Signal,
+  Telegram, LINE, iMessage and more), posting from the owner's account.
+  Inbound over the Desktop API WebSocket with REST backfill; outbound over REST.
+  Deny-by-default per-chat allowlist, trigger prefix, reply marker, loop
+  prevention and dry-run mode.
+author: clins1994
+requires_env:
+  - name: BEEPER_ACCESS_TOKEN
+    description: "Beeper Desktop API access token (Beeper Desktop → Settings → Developers)"
+    prompt: "Beeper Desktop API access token"
+    url: "https://developers.beeper.com/desktop-api"
+    password: true
+optional_env:
+  - name: BEEPER_ALLOWED_USERS
+    description: "Optional extra sender allowlist (comma-separated Beeper sender IDs); per-chat invokers in config.yaml are the main control"
+    prompt: "Allowed sender IDs (comma-separated)"
+    password: false

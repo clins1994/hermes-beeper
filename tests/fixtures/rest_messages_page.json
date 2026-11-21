@@ -1,0 +1,56 @@
+{
+ "items": [
+  {
+   "id": "1002",
+   "sortKey": "50002",
+   "timestamp": "2025-11-10T10:17:16.374000Z",
+   "isDeleted": false,
+   "isSender": true,
+   "type": "TEXT",
+   "accountID": "network8",
+   "chatID": "!chat46:beeper.local",
+   "senderID": "@owner:beeper.com",
+   "senderName": "Owner",
+   "text": "owner text 1002",
+   "mentions": [],
+   "seen": {
+    "@owner:beeper.com": "2025-11-10T10:17:19.370000Z"
+   }
+  },
+  {
+   "id": "1001",
+   "sortKey": "50001",
+   "timestamp": "2025-11-10T10:16:46.260000Z",
+   "isDeleted": false,
+   "isSender": true,
+   "type": "TEXT",
+   "accountID": "network8",
+   "chatID": "!chat46:beeper.local",
+   "senderID": "@owner:beeper.com",
+   "senderName": "Owner",
+   "text": "owner text 1001",
+   "mentions": [],
+   "seen": {
+    "@owner:beeper.com": "2025-11-10T10:17:19.370000Z"
+   }
+  },
+  {
+   "id": "1000",
+   "sortKey": "50000",
+   "timestamp": "2025-11-10T10:17:18.290000Z",
+   "isSender": false,
+   "isUnread": false,
+   "accountID": "network8",
+   "chatID": "!chat46:beeper.local",
+   "senderID": "@friend19:beeper.local",
+   "senderName": "Friend 14",
+   "text": "friend text 1000",
+   "seen": {
+    "@owner:beeper.com": "2025-11-10T10:17:18.385000Z"
+   }
+  }
+ ],
+ "hasMore": false,
+ "oldestCursor": "50000",
+ "newestCursor": "50002"
+}
