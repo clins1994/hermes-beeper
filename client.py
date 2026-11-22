@@ -7,6 +7,7 @@ text sends. Every request carries the Bearer token; the token never appears in e
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 from collections import deque
 from collections.abc import Awaitable, Callable
@@ -54,6 +55,21 @@ class MessagePage:
     has_more: bool
     oldest_cursor: str | None
 
+
+
+_MD_PUNCT = re.compile(r"([!-/:-@\[-`{-~])")
+_SPACE_RUN = re.compile(r"(?m)^ +| {2,}")
+
+
+def literal_text(text: str) -> str:
+    """Make ``text`` arrive exactly as written: the send endpoint parses Markdown.
+
+    Every ASCII punctuation character gets a backslash escape (CommonMark removes it again), so
+    ``*``, ``_``, ``~`` and backslashes are not turned into formatting or eaten; leading spaces and
+    runs of spaces become no-break spaces, which the HTML the API produces would otherwise collapse.
+    """
+    text = _MD_PUNCT.sub(r"\\\1", text)
+    return _SPACE_RUN.sub(lambda m: "\u00a0" * len(m.group(0)), text)
 
 class BeeperClient:
     def __init__(self, base_url: str, token: str, *, http: httpx.AsyncClient | None = None) -> None:
@@ -118,7 +134,7 @@ class BeeperClient:
 
     async def send_text(self, chat_id: str, text: str, *, reply_to: str | None = None) -> str:
         """Send text; returns the ``pendingMessageID`` (the local ID the echo will carry)."""
-        body: dict[str, Any] = {"text": text}
+        body: dict[str, Any] = {"text": literal_text(text)}
         if reply_to:
             body["replyToMessageID"] = reply_to
         data = await self._request("POST", f"/v1/chats/{quote(chat_id, safe='')}/messages", json=body)
