@@ -59,17 +59,25 @@ class MessagePage:
 
 _MD_PUNCT = re.compile(r"([!-/:-@\[-`{-~])")
 _SPACE_RUN = re.compile(r"(?m)^ +| {2,}")
+_FENCE = re.compile(r"(```[^\n`]*\n.*?\n```)", re.S)
+_BLANK = "\u2800"  # braille blank: bridges strip leading spaces and no-break spaces, not this
 
 
 def literal_text(text: str) -> str:
-    """Make ``text`` arrive exactly as written: the send endpoint parses Markdown.
+    """Make ``text`` arrive as written: the send endpoint parses Markdown.
 
-    Every ASCII punctuation character gets a backslash escape (CommonMark removes it again), so
-    ``*``, ``_``, ``~`` and backslashes are not turned into formatting or eaten; leading spaces and
-    runs of spaces become no-break spaces, which the HTML the API produces would otherwise collapse.
+    Fenced code blocks pass through untouched, so networks that support it show them in a monospace
+    font (the right place for ASCII art). Everywhere else every ASCII punctuation character gets a
+    backslash escape (CommonMark removes it again), so ``*``, ``_``, ``~`` and backslashes are not
+    turned into formatting or eaten, and leading spaces and runs of spaces become blank characters
+    that the HTML conversion and the network bridges do not collapse.
     """
-    text = _MD_PUNCT.sub(r"\\\1", text)
-    return _SPACE_RUN.sub(lambda m: "\u00a0" * len(m.group(0)), text)
+    parts = _FENCE.split(text)
+    for index in range(0, len(parts), 2):
+        escaped = _MD_PUNCT.sub(r"\\\1", parts[index])
+        parts[index] = _SPACE_RUN.sub(lambda m: _BLANK * len(m.group(0)), escaped)
+    return "".join(parts)
+
 
 class BeeperClient:
     def __init__(self, base_url: str, token: str, *, http: httpx.AsyncClient | None = None) -> None:
