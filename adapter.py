@@ -356,14 +356,16 @@ class BeeperAdapter(OwnAccessPolicyMixin, BasePlatformAdapter):
             (c for c in self._chats.values() if chat_id in (c.info.local_id, c.rule.chat_key)), None)
         if active is None:
             return SendResult(success=False, error="Beeper: chat is not in gateway.platforms.beeper.chats; refusing to send")
-        text = (content or "").strip()
-        if not text:
+        text = (content or "").strip("\r\n").rstrip()  # keep leading spaces: they can be ASCII art
+        if not text.strip():
             return SendResult(success=False, error="Beeper send requires text")
         marker = self.settings.reply_marker
         chunks = self.truncate_message(text, self.MAX_MESSAGE_LENGTH - len(marker))
         result = SendResult(success=True)
         for index, chunk in enumerate(chunks):
-            result = await self._send_chunk(active, f"{marker}{chunk}", reply_to if index == 0 else None)
+            # A code fence only opens at the start of a line, so the marker gets its own line before one.
+            prefix = f"{marker.rstrip()}\n" if chunk.startswith("```") else marker
+            result = await self._send_chunk(active, f"{prefix}{chunk}", reply_to if index == 0 else None)
             if not result.success:
                 return result
         return result

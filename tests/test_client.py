@@ -31,3 +31,7 @@ def test_fenced_code_blocks_pass_through_for_monospace() -> None:
 
 def test_plain_text_and_non_ascii_pass_through() -> None:
     assert literal_text("oi mano, tudo bem? 🐺 ção") == "oi mano\\, tudo bem\\? 🐺 ção"
+
+
+def test_a_fence_in_the_middle_of_a_line_is_not_a_code_block() -> None:
+    assert literal_text("x ```\na\\b\n```") == "x \\`\\`\\`\na\\\\b\n\\`\\`\\`"

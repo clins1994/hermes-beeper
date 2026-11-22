@@ -264,6 +264,26 @@ async def test_send_prefixes_marker_replies_and_suppresses_its_own_echo(monkeypa
 
 
 @pytest.mark.asyncio
+async def test_a_reply_that_opens_with_a_code_block_puts_the_marker_on_its_own_line(monkeypatch):
+    adapter, client, sock = await _connected(monkeypatch)
+    art = "```\n /\\_/\\\n( o.o )\n```\ncaption"
+    result = await adapter.send(NOTES.id, art, reply_to="100")
+    assert client.sent == [(NOTES.id, "🤖\n" + art, "100")]
+    await _upsert(adapter, sock, 1, _msg("echo-elsewhere", text="🤖\n" + art, sort_key=99999, is_sender=True))
+    assert adapter.handle_message.await_count == 0, "the marker on its own line must still mark our echo"
+    assert result.success
+    await adapter.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_leading_spaces_of_a_reply_are_kept(monkeypatch):
+    adapter, client, _ = await _connected(monkeypatch)
+    await adapter.send(NOTES.id, "\n   /\\\n  /  \\\n")
+    assert client.sent[0][1] == "🤖    /\\\n  /  \\"
+    await adapter.disconnect()
+
+
+@pytest.mark.asyncio
 async def test_send_refuses_chats_outside_the_allowlist(monkeypatch):
     adapter, client, _ = await _connected(monkeypatch)
     result = await adapter.send(OTHER, "hello")

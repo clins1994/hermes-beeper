@@ -59,7 +59,7 @@ class MessagePage:
 
 _MD_PUNCT = re.compile(r"([!-/:-@\[-`{-~])")
 _SPACE_RUN = re.compile(r"(?m)^ +| {2,}")
-_FENCE = re.compile(r"(```[^\n`]*\n.*?\n```)", re.S)
+_FENCE = re.compile(r"(^```[^\n`]*\n.*?\n```[ \t]*$)", re.S | re.M)  # fences count only at line starts
 _BLANK = "\u2800"  # braille blank: bridges strip leading spaces and no-break spaces, not this
 
 
