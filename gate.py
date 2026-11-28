@@ -38,7 +38,15 @@ class Drop(Enum):
 
 @dataclass(frozen=True)
 class Admit:
+    """``text`` is what the sender wrote, trigger stripped (a media message's caption, "" for none).
+    ``placeholder`` (``[attachment: image]``) marks a media message; the adapter shows it to the agent
+    when it does not pass the file itself."""
+
     text: str
+    placeholder: str = ""
+
+    def with_placeholder(self) -> str:
+        return f"{self.placeholder} {self.text}".strip()
 
 
 class BoundedIdSet:
@@ -69,13 +77,13 @@ def strip_trigger(text: str, trigger: str) -> str | None:
     return rest.lstrip(" \t,:;-").strip()
 
 
-def _content(msg: BeeperMessage) -> str | None:
-    """Text the agent sees, with a placeholder for media; None for types that never wake it."""
+def _content(msg: BeeperMessage) -> tuple[str, str] | None:
+    """(text or caption, media placeholder); None for types that never wake the agent. The trigger is
+    matched against the caption, so a photo captioned ``!agent ...`` works in prefix mode."""
     if msg.type == TEXT_TYPE:
-        return msg.text
+        return msg.text, ""
     if msg.type in MEDIA_TYPES:
-        placeholder = f"[attachment: {msg.type.lower()}]"
-        return f"{placeholder} {msg.text}".strip() if msg.text else placeholder
+        return msg.text, f"[attachment: {msg.type.lower()}]"
     return None
 
 
@@ -140,18 +148,18 @@ class IntakeGate:
         if (loop := self._loop_drop(msg)) is not None:
             return loop
         self.handled_ids.add(msg.id)
-        content = _content(msg)
-        if content is None:
+        if (content := _content(msg)) is None:
             return Drop.TYPE
+        caption, placeholder = content
         if not rule.allows_sender(sender_id=msg.sender_id, is_self=msg.is_sender):
             return Drop.INVOKER
-        text = strip_trigger(content, rule.trigger)
+        text = strip_trigger(caption, rule.trigger)
         if text is None:
             if rule.mode != "always":
                 return Drop.NO_TRIGGER
-            text = content.strip()
-        if not text:
+            text = caption.strip()
+        if not text and not placeholder:
             return Drop.EMPTY
         if self.breaker.tripped(msg.chat_id):
             return Drop.BREAKER
-        return Admit(text=text)
+        return Admit(text=text, placeholder=placeholder)

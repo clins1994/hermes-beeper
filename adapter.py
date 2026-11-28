@@ -3,7 +3,8 @@
 Inbound: the Desktop API WebSocket (``GET /v1/ws``, ``subscriptions.set`` for the allowlisted chats
 only, ``message.upserted``), plus REST backfill after every (re)connect and on ``seq`` gaps — the
 socket is at-most-once with no replay. Outbound: ``POST /v1/chats/{id}/messages`` as a reply to the
-triggering message, prefixed with the reply marker.
+triggering message, prefixed with the reply marker. Photos in admitted messages are streamed from
+``GET /v1/assets/serve`` into Hermes' image cache and passed to the agent as local files.
 
 The agent speaks from the owner's own accounts, so the adapter is deny-by-default: no chat is active
 until it is listed under ``gateway.platforms.beeper.chats``, and it never sends to any other chat.
@@ -25,14 +26,14 @@ from typing import TYPE_CHECKING, Any
 from gateway.config import Platform, PlatformConfig
 from gateway.platforms._shared import get_scoped_secret
 from gateway.platforms.access_policy_mixin import OwnAccessPolicyMixin
-from gateway.platforms.base import BasePlatformAdapter, SendResult
+from gateway.platforms.base import BasePlatformAdapter, SendResult, cache_image_from_bytes_async
 from gateway.platforms.event import MessageEvent, MessageType, ProcessingOutcome
 from gateway.platforms.helpers import hash_for_log
 
 from . import cursors as cursor_store
 from .client import BeeperApiError, BeeperClient, ChatInfo, SendPacer
 from .config import ANY_INVOKER, SELF_INVOKER, BeeperConfigError, BeeperSettings, ChatRule, parse_settings
-from .events import BeeperMessage, Frame, FrameError, parse_frame, sort_key_after
+from .events import Attachment, BeeperMessage, Frame, FrameError, parse_frame, sort_key_after
 from .gate import Admit, IntakeGate, ReplyBreaker
 
 if TYPE_CHECKING:
@@ -44,6 +45,9 @@ TOKEN_ENV = "BEEPER_ACCESS_TOKEN"
 MAX_TEXT_LENGTH = 4000
 _BACKFILL_MAX_PAGES = 5
 _RECONNECT_MAX_SECONDS = 30.0
+# Cache file extension per photo MIME type; the cache sniffs the bytes, so an unknown type still works as .jpg.
+_PHOTO_EXT = {"image/jpeg": ".jpg", "image/png": ".png", "image/gif": ".gif", "image/webp": ".webp",
+              "image/heic": ".heic", "image/heif": ".heif", "image/avif": ".avif", "image/bmp": ".bmp"}
 
 PLATFORM_HINT = (  # facts about the channel only: tone, length and persona belong to the user's SOUL.md
     "You are replying inside the owner's personal chats through Beeper (WhatsApp, Signal, Telegram, "
@@ -326,16 +330,51 @@ class BeeperAdapter(OwnAccessPolicyMixin, BasePlatformAdapter):
             return
         logger.info("[beeper] dispatching %d chars from chat %s (%s)", len(decision.text),
                     hash_for_log(msg.chat_id), active.rule.label)
-        await self._dispatch(msg, decision.text, active)
+        await self._dispatch(msg, decision, active)
 
-    async def _dispatch(self, msg: BeeperMessage, text: str, active: ActiveChat) -> None:
+    async def _cache_photos(self, msg: BeeperMessage) -> tuple[list[str], list[str], int]:
+        """Download the message's photos into Hermes' image cache (owner-only files with random names).
+        Returns (paths, MIME types, photos that could not be passed). Stickers, videos and other files
+        are left out. Runs before dispatch, so a photo and the text right after it keep their order."""
+        if not self.settings.download_images or self._client is None:
+            return [], [], 0
+        paths: list[str] = []
+        types: list[str] = []
+        failed = 0
+        for attachment in (a for a in msg.attachments if a.is_photo):
+            try:
+                path = await self._cache_photo(attachment)
+            except (BeeperApiError, ValueError, OSError) as exc:
+                failed += 1
+                logger.warning("[beeper] could not pass a photo from chat %s to the agent; it sees a placeholder: %s",
+                               hash_for_log(msg.chat_id), exc)
+                continue
+            paths.append(path)
+            types.append(attachment.mime_type if attachment.mime_type.startswith("image/") else "image/jpeg")
+        return paths, types, failed
+
+    async def _cache_photo(self, attachment: Attachment) -> str:
+        limit = self.settings.max_image_bytes
+        if attachment.file_size is not None and attachment.file_size > limit:
+            raise BeeperApiError(f"photo is {attachment.file_size} bytes, over max_image_mb ({limit} bytes)",
+                                 code="too_large")
+        assert self._client is not None
+        data = await self._client.download_asset(attachment.src_url, max_bytes=limit)
+        # Raises ValueError for bytes that are not an image (the declared MIME type is not trusted).
+        return await cache_image_from_bytes_async(data, ext=_PHOTO_EXT.get(attachment.mime_type, ".jpg"))
+
+    async def _dispatch(self, msg: BeeperMessage, decision: Admit, active: ActiveChat) -> None:
+        paths, types, failed = await self._cache_photos(msg) if decision.placeholder else ([], [], 0)
+        # Without the file the agent gets the placeholder, as before; with it, the caption alone.
+        text = decision.text if paths and not failed else decision.with_placeholder()
         sender = msg.sender_id or (self._own_id if msg.is_sender else "")
         source = self.build_source(
             chat_id=msg.chat_id, chat_name=active.info.title or active.rule.label,
             chat_type="group" if active.info.chat_type == "group" else "dm",
             user_id=sender, user_name=msg.sender_name or None, message_id=msg.id,
             chat_id_alt=active.info.local_id or None)
-        event = MessageEvent(text=text, message_type=MessageType.TEXT, source=source, message_id=msg.id,
+        event = MessageEvent(text=text, message_type=MessageType.PHOTO if paths else MessageType.TEXT, source=source,
+                             message_id=msg.id, media_urls=paths, media_types=types,
                              reply_to_message_id=msg.reply_to_id, timestamp=msg.timestamp or datetime.now(UTC))
         task = asyncio.create_task(self.handle_message(event))
         self._background_tasks.add(task)
