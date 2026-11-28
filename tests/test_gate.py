@@ -62,6 +62,18 @@ def test_own_message_with_reply_marker_is_dropped(make_message):
     assert _gate().evaluate(make_message(text="🤖 !agent I am the agent"), _rule(mode="always")) is Drop.MARKER
 
 
+def test_own_reply_echoed_back_as_html_is_dropped(make_message):
+    # LINE echoed formatted replies as HTML, so the marker check missed them and the agent answered itself.
+    echoed = make_message(text="<p>🤖 えっと、わたしはスロスだよ〜</p><p>次の段落</p>")
+    assert _gate().evaluate(echoed, _rule(mode="always")) is Drop.MARKER
+
+
+def test_html_message_text_reaches_the_agent_as_plain_text(make_message):
+    msg = make_message(text="<p>!agent first line<br>second &amp; third</p><p>next</p>")
+    assert msg.text == "!agent first line\nsecond & third\nnext"
+    assert make_message(text="a < b and <3").text == "a < b and <3"
+
+
 def test_friend_message_starting_with_marker_is_not_mistaken_for_the_agent(make_message):
     friend = make_message(senderID="@friend1:beeper.local", isSender=False, text="🤖 !agent hi")
     assert _gate().evaluate(friend, _rule(invokers="*")) is Drop.NO_TRIGGER
