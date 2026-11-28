@@ -49,6 +49,7 @@ class FakeClient:
         self.assets: dict[str, bytes | Exception] = {}
         self.downloads: list[tuple[str, int]] = []
         self.uploads: list[tuple[bytes, str, str]] = []
+        self.on_send_attachment = None
         self._next_id = 9000
 
     async def whoami(self):
@@ -82,6 +83,8 @@ class FakeClient:
         return f"upload-{len(self.uploads)}"
 
     async def send_attachment(self, chat_id, upload_id, *, text="", reply_to=None):
+        if self.on_send_attachment:
+            await self.on_send_attachment()
         self._next_id += 1
         self.sent.append((chat_id, f"{text} [{upload_id}]", reply_to))
         return str(self._next_id)
@@ -690,4 +693,18 @@ async def test_the_echo_of_a_sent_photo_never_wakes_the_agent_even_as_a_new_mess
     # The owner's own, different photo still wakes the agent.
     await _upsert(adapter, sock, 3, _photo("owner-photo", sort_key=100000, fileName="IMG_1.jpg", fileSize=len(PNG)))
     await async_wait_until(lambda: adapter.handle_message.await_count == 1)
+    await adapter.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_the_echo_of_a_photo_is_ignored_even_when_it_arrives_before_the_send_returns(monkeypatch, tmp_path):
+    adapter, client, sock = await _connected(monkeypatch, chats=ALWAYS)
+    photo = tmp_path / "cover.jpg"
+    photo.write_bytes(PNG)
+
+    async def _echo_first():  # LINE echoes the photo while the send request still waits
+        await _upsert(adapter, sock, 1, _photo("echo-photo", sort_key=99998, fileName="cover.jpg", fileSize=len(PNG)))
+    client.on_send_attachment = _echo_first
+    assert (await adapter.send_image_file(NOTES.id, str(photo))).success
+    assert adapter.handle_message.await_count == 0
     await adapter.disconnect()

@@ -435,13 +435,14 @@ class BeeperAdapter(OwnAccessPolicyMixin, BasePlatformAdapter):
             return self._dry_run_send(active, f"{text} [photo: {path.name}]", reply_to)
         assert self._client is not None
         await self._pacer.acquire(active.info.id)
+        # Before the send: its echo can arrive while the send request is still waiting for the network.
+        self.gate.note_sent_file(path.name, len(data))
         try:
             upload_id = await self._client.upload_asset(data, file_name=path.name, mime_type=mime_type)
             pending_id = await self._client.send_attachment(active.info.id, upload_id, text=text, reply_to=reply_to)
         except BeeperApiError as exc:
             return SendResult(success=False, error=str(exc), retryable=exc.retryable)
         self.gate.note_sent(pending_id)
-        self.gate.note_sent_file(path.name, len(data))
         return SendResult(success=True, message_id=pending_id)
 
     def _find_chat(self, chat_id: str) -> ActiveChat | None:
