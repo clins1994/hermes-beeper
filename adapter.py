@@ -397,9 +397,10 @@ class BeeperAdapter(OwnAccessPolicyMixin, BasePlatformAdapter):
         if active is None:
             return SendResult(success=False, error="Beeper: chat is not in gateway.platforms.beeper.chats; refusing to send")
         text = (content or "").strip("\r\n").rstrip()  # keep leading spaces: they can be ASCII art
+        marker = self.settings.reply_marker
+        text = self._without_marker(text)
         if not text.strip():
             return SendResult(success=False, error="Beeper send requires text")
-        marker = self.settings.reply_marker
         chunks = self.truncate_message(text, self.MAX_MESSAGE_LENGTH - len(marker))
         result = SendResult(success=True)
         for index, chunk in enumerate(chunks):
@@ -414,8 +415,9 @@ class BeeperAdapter(OwnAccessPolicyMixin, BasePlatformAdapter):
                               reply_to: str | None = None, metadata: dict[str, Any] | None = None,
                               **kwargs: Any) -> SendResult:
         """Send a local photo, for example a crop for the owner to approve. Hermes checks the path first
-        (``validate_media_delivery_path``). The caption always starts with the reply marker: the photo goes
-        out from the owner's account, and without it the echo would look like the owner sending a photo."""
+        (``validate_media_delivery_path``). A caption starts with the reply marker. Without a caption the photo goes
+        alone: LINE would show a marker-only caption as a separate message. Its echo is recognized by file name
+        and size (``note_sent_file``), so the marker is not needed for that."""
         active = self._find_chat(chat_id)
         if active is None:
             return SendResult(success=False, error="Beeper: chat is not in gateway.platforms.beeper.chats; refusing to send")
@@ -429,7 +431,8 @@ class BeeperAdapter(OwnAccessPolicyMixin, BasePlatformAdapter):
             data = path.read_bytes()
         except OSError as exc:
             return SendResult(success=False, error=f"Beeper: cannot read {path.name}: {type(exc).__name__}")
-        text = f"{self.settings.reply_marker}{(caption or '').strip()}".rstrip()
+        caption_text = self._without_marker((caption or "").strip())
+        text = f"{self.settings.reply_marker}{caption_text}".rstrip() if caption_text else ""
         self.gate.breaker.record(active.info.id)
         if self.settings.dry_run:
             return self._dry_run_send(active, f"{text} [photo: {path.name}]", reply_to)
@@ -444,6 +447,13 @@ class BeeperAdapter(OwnAccessPolicyMixin, BasePlatformAdapter):
             return SendResult(success=False, error=str(exc), retryable=exc.retryable)
         self.gate.note_sent(pending_id)
         return SendResult(success=True, message_id=pending_id)
+
+    def _without_marker(self, text: str) -> str:
+        """The agent often copies the marker from its earlier replies; the adapter adds it, so drop it."""
+        mark = self.settings.reply_marker.strip()
+        while mark and text.lstrip().startswith(mark):
+            text = text.lstrip()[len(mark):].lstrip(" ")
+        return text
 
     def _find_chat(self, chat_id: str) -> ActiveChat | None:
         return self._chats.get(chat_id) or next(

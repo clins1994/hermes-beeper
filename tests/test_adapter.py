@@ -658,12 +658,13 @@ async def test_send_image_file_uploads_the_photo_with_the_marker_caption_and_ign
 
 
 @pytest.mark.asyncio
-async def test_send_image_file_without_a_caption_still_carries_the_marker(monkeypatch, tmp_path):
+async def test_send_image_file_without_a_caption_sends_the_photo_alone(monkeypatch, tmp_path):
     adapter, client, _ = await _connected(monkeypatch)
     photo = tmp_path / "a.png"
     photo.write_bytes(b"png")
     assert (await adapter.send_image_file(NOTES.id, str(photo))).success
-    assert client.sent == [(NOTES.id, "🤖 [upload-1]", None)]
+    assert (await adapter.send_image_file(NOTES.id, str(photo), caption="🤖")).success
+    assert client.sent == [(NOTES.id, " [upload-1]", None), (NOTES.id, " [upload-2]", None)]
     await adapter.disconnect()
 
 
@@ -707,4 +708,16 @@ async def test_the_echo_of_a_photo_is_ignored_even_when_it_arrives_before_the_se
     client.on_send_attachment = _echo_first
     assert (await adapter.send_image_file(NOTES.id, str(photo))).success
     assert adapter.handle_message.await_count == 0
+    await adapter.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_a_reply_that_already_starts_with_the_marker_gets_it_once(monkeypatch, tmp_path):
+    adapter, client, _ = await _connected(monkeypatch)
+    await adapter.send(NOTES.id, "🤖 🤖 Done!")
+    photo = tmp_path / "a.jpg"
+    photo.write_bytes(b"jpg")
+    await adapter.send_image_file(NOTES.id, str(photo), caption="🤖 Here it is")
+    assert [text for _, text, _ in client.sent] == ["🤖 Done!", "🤖 Here it is [upload-1]"]
+    assert not (await adapter.send(NOTES.id, "🤖")).success, "a reply that is only the marker sends nothing"
     await adapter.disconnect()
