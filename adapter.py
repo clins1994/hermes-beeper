@@ -441,6 +441,7 @@ class BeeperAdapter(OwnAccessPolicyMixin, BasePlatformAdapter):
         except BeeperApiError as exc:
             return SendResult(success=False, error=str(exc), retryable=exc.retryable)
         self.gate.note_sent(pending_id)
+        self.gate.note_sent_file(path.name, len(data))
         return SendResult(success=True, message_id=pending_id)
 
     def _find_chat(self, chat_id: str) -> ActiveChat | None:

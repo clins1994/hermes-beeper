@@ -675,3 +675,19 @@ async def test_send_image_file_refuses_other_chats_and_files_that_are_not_photos
     assert not (await adapter.send_image_file(NOTES.id, str(tmp_path / "missing.jpg"))).success
     assert (client.uploads, client.sent) == ([], [])
     await adapter.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_the_echo_of_a_sent_photo_never_wakes_the_agent_even_as_a_new_message_without_caption(monkeypatch, tmp_path):
+    # LINE splits a photo and its caption: the photo comes back with a new ID and no text, from the owner's account.
+    adapter, _, sock = await _connected(monkeypatch, chats=ALWAYS)
+    photo = tmp_path / "cover.jpg"
+    photo.write_bytes(PNG)
+    assert (await adapter.send_image_file(NOTES.id, str(photo), caption="Is this crop OK?")).success
+    await _upsert(adapter, sock, 1, _photo("echo-photo", sort_key=99998, fileName="cover.jpg", fileSize=len(PNG)))
+    await _upsert(adapter, sock, 2, _msg("echo-caption", text="🤖", sort_key=99999))
+    assert adapter.handle_message.await_count == 0
+    # The owner's own, different photo still wakes the agent.
+    await _upsert(adapter, sock, 3, _photo("owner-photo", sort_key=100000, fileName="IMG_1.jpg", fileSize=len(PNG)))
+    await async_wait_until(lambda: adapter.handle_message.await_count == 1)
+    await adapter.disconnect()
