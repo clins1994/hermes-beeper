@@ -7,7 +7,9 @@ checked against Beeper Desktop 4.3.22.
 
 from __future__ import annotations
 
+import html
 import json
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
@@ -22,6 +24,22 @@ _FRAME_TYPES: frozenset[str] = frozenset(FrameType.__args__)  # type: ignore[att
 # Message ``type`` values that carry user content. REACTION / NOTICE / unknown types never wake the agent.
 TEXT_TYPE = "TEXT"
 MEDIA_TYPES: frozenset[str] = frozenset({"IMAGE", "VIDEO", "AUDIO", "VOICE", "FILE", "STICKER"})
+
+
+# Formatted messages arrive with ``text`` as HTML (for example ``<p>🦥 hi</p>``), including the agent's
+# own replies when the network echoes them back formatted. Everything downstream (the reply-marker loop
+# guard, the trigger, the agent's input) needs the plain text.
+_HTML_TAG = re.compile(r"</?(?:p|br|b|i|u|s|em|strong|del|code|pre|blockquote|a|span|ul|ol|li|h[1-6])\b[^>]*>", re.I)
+_BREAK = re.compile(r"<br\s*/?>|</(?:p|li|h[1-6]|blockquote|pre)>", re.I)
+
+
+def plain_text(text: str) -> str:
+    """``text`` without HTML formatting: line breaks kept, tags dropped, entities decoded. Plain text is unchanged."""
+    if not _HTML_TAG.search(text):
+        return text
+    text = _BREAK.sub("\n", text)
+    text = _HTML_TAG.sub("", text)
+    return html.unescape(text).strip()
 
 
 class FrameError(ValueError):
@@ -62,7 +80,7 @@ class BeeperMessage:
             sender_id=str(raw.get("senderID") or ""),
             sender_name=str(raw.get("senderName") or ""),
             is_sender=raw.get("isSender") is True,
-            text=str(raw.get("text") or ""),
+            text=plain_text(str(raw.get("text") or "")),
             type=str(raw.get("type") or ""),
             timestamp=_parse_ts(raw.get("timestamp")),
             sort_key=str(raw.get("sortKey") or ""),
