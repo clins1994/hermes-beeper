@@ -18,9 +18,11 @@ import contextlib
 import dataclasses
 import json
 import logging
+import mimetypes
 import os
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from gateway.config import Platform, PlatformConfig
@@ -391,14 +393,14 @@ class BeeperAdapter(OwnAccessPolicyMixin, BasePlatformAdapter):
 
     async def send(self, chat_id: str, content: str, reply_to: str | None = None,
                    metadata: dict[str, Any] | None = None) -> SendResult:
-        active = self._chats.get(chat_id) or next(
-            (c for c in self._chats.values() if chat_id in (c.info.local_id, c.rule.chat_key)), None)
+        active = self._find_chat(chat_id)
         if active is None:
             return SendResult(success=False, error="Beeper: chat is not in gateway.platforms.beeper.chats; refusing to send")
         text = (content or "").strip("\r\n").rstrip()  # keep leading spaces: they can be ASCII art
+        marker = self.settings.reply_marker
+        text = self._without_marker(text)
         if not text.strip():
             return SendResult(success=False, error="Beeper send requires text")
-        marker = self.settings.reply_marker
         chunks = self.truncate_message(text, self.MAX_MESSAGE_LENGTH - len(marker))
         result = SendResult(success=True)
         for index, chunk in enumerate(chunks):
@@ -408,6 +410,54 @@ class BeeperAdapter(OwnAccessPolicyMixin, BasePlatformAdapter):
             if not result.success:
                 return result
         return result
+
+    async def send_image_file(self, chat_id: str, image_path: str, caption: str | None = None,
+                              reply_to: str | None = None, metadata: dict[str, Any] | None = None,
+                              **kwargs: Any) -> SendResult:
+        """Send a local photo, for example a crop for the owner to approve. Hermes checks the path first
+        (``validate_media_delivery_path``). A caption starts with the reply marker. Without a caption the photo goes
+        alone: LINE would show a marker-only caption as a separate message. Its echo is recognized by file name
+        and size (``note_sent_file``), so the marker is not needed for that."""
+        active = self._find_chat(chat_id)
+        if active is None:
+            return SendResult(success=False, error="Beeper: chat is not in gateway.platforms.beeper.chats; refusing to send")
+        path = Path(image_path)
+        mime_type = mimetypes.guess_type(path.name)[0] or ""
+        if not mime_type.startswith("image/"):
+            return SendResult(success=False, error=f"Beeper: {path.name} is not a photo")
+        try:
+            if path.stat().st_size > self.settings.max_image_bytes:
+                return SendResult(success=False, error=f"Beeper: {path.name} is over max_image_mb")
+            data = path.read_bytes()
+        except OSError as exc:
+            return SendResult(success=False, error=f"Beeper: cannot read {path.name}: {type(exc).__name__}")
+        caption_text = self._without_marker((caption or "").strip())
+        text = f"{self.settings.reply_marker}{caption_text}".rstrip() if caption_text else ""
+        self.gate.breaker.record(active.info.id)
+        if self.settings.dry_run:
+            return self._dry_run_send(active, f"{text} [photo: {path.name}]", reply_to)
+        assert self._client is not None
+        await self._pacer.acquire(active.info.id)
+        # Before the send: its echo can arrive while the send request is still waiting for the network.
+        self.gate.note_sent_file(path.name, len(data))
+        try:
+            upload_id = await self._client.upload_asset(data, file_name=path.name, mime_type=mime_type)
+            pending_id = await self._client.send_attachment(active.info.id, upload_id, text=text, reply_to=reply_to)
+        except BeeperApiError as exc:
+            return SendResult(success=False, error=str(exc), retryable=exc.retryable)
+        self.gate.note_sent(pending_id)
+        return SendResult(success=True, message_id=pending_id)
+
+    def _without_marker(self, text: str) -> str:
+        """The agent often copies the marker from its earlier replies; the adapter adds it, so drop it."""
+        mark = self.settings.reply_marker.strip()
+        while mark and text.lstrip().startswith(mark):
+            text = text.lstrip()[len(mark):].lstrip(" ")
+        return text
+
+    def _find_chat(self, chat_id: str) -> ActiveChat | None:
+        return self._chats.get(chat_id) or next(
+            (c for c in self._chats.values() if chat_id in (c.info.local_id, c.rule.chat_key)), None)
 
     async def _send_chunk(self, active: ActiveChat, text: str, reply_to: str | None) -> SendResult:
         chat_id = active.info.id

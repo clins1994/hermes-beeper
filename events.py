@@ -38,11 +38,17 @@ class Attachment:
     mime_type: str
     file_size: int | None
     is_sticker: bool
+    file_name: str = ""
 
     @property
     def is_photo(self) -> bool:
         """An image the agent can look at: not a sticker, and not declared as anything but ``image/*``."""
         return self.type == "img" and not self.is_sticker and (not self.mime_type or self.mime_type.startswith("image/"))
+
+    @property
+    def fingerprint(self) -> str | None:
+        """File name and exact size: how the agent's own photo is recognized when it comes back."""
+        return f"{self.file_name}:{self.file_size}" if self.file_name and self.file_size else None
 
     @classmethod
     def from_api(cls, raw: Mapping[str, Any]) -> Attachment:
@@ -53,6 +59,7 @@ class Attachment:
             mime_type=str(raw.get("mimeType") or "").split(";")[0].strip().lower(),
             file_size=int(size) if isinstance(size, (int, float)) and not isinstance(size, bool) else None,
             is_sticker=raw.get("isSticker") is True,
+            file_name=str(raw.get("fileName") or ""),
         )
 
 

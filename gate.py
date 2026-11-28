@@ -118,11 +118,17 @@ class IntakeGate:
         self.breaker = breaker
         self.sent_ids = BoundedIdSet(2048)
         self.handled_ids = BoundedIdSet(8192)
+        self.sent_files = BoundedIdSet(256)
         self.cursors: dict[str, str] = dict(cursors or {})
 
     def note_sent(self, message_id: str) -> None:
         if message_id:
             self.sent_ids.add(message_id)
+
+    def note_sent_file(self, file_name: str, file_size: int) -> None:
+        """Remember a photo the agent sent. Its echo can come back as a new message, without the caption
+        (LINE splits a photo and its text into two messages), so the ID and the marker both miss it."""
+        self.sent_files.add(f"{file_name}:{file_size}")
 
     def advance(self, msg: BeeperMessage) -> bool:
         """Move the chat cursor past ``msg``; False when ``msg`` is not newer than the cursor."""
@@ -138,6 +144,8 @@ class IntakeGate:
             return Drop.ECHO
         if msg.is_sender and msg.text.startswith(self.reply_marker.strip()):
             return Drop.MARKER
+        if msg.is_sender and any(a.fingerprint in self.sent_files for a in msg.attachments if a.fingerprint):
+            return Drop.ECHO
         if msg.id in self.handled_ids:
             return Drop.DUPLICATE
         if not self.advance(msg):
