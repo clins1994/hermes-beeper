@@ -5,7 +5,11 @@ The Desktop API is replaced by an in-memory client and WebSocket; no network, no
 
 import asyncio
 import json
+import logging
+import os
+import stat
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
@@ -15,6 +19,7 @@ from beeper_platform.adapter import BeeperAdapter, register
 from beeper_platform.client import BeeperApiError, ChatInfo, MessagePage
 from beeper_platform.events import BeeperMessage
 from gateway.config import PlatformConfig
+from gateway.platforms.event import MessageType
 
 NOTES = ChatInfo(id="!notes:beeper.local", local_id="101", title="Notes", network="Signal", chat_type="single")
 FRIENDS = ChatInfo(id="!friends:beeper.local", local_id="77", title="Friends", network="WhatsApp", chat_type="group")
@@ -41,6 +46,8 @@ class FakeClient:
         self.sent: list[tuple[str, str, str | None]] = []
         self.token_error = token_error
         self.reactions: list[tuple[str, str, str, str]] = []
+        self.assets: dict[str, bytes | Exception] = {}
+        self.downloads: list[tuple[str, int]] = []
         self._next_id = 9000
 
     async def whoami(self):
@@ -56,6 +63,13 @@ class FakeClient:
     async def list_messages(self, chat_id, *, before=None):
         items = sorted(self.pages.get(chat_id, []), key=lambda m: int(m["sortKey"]), reverse=True)
         return MessagePage(messages=tuple(BeeperMessage.from_api(m) for m in items), has_more=False, oldest_cursor=None)
+
+    async def download_asset(self, url, *, max_bytes):
+        self.downloads.append((url, max_bytes))
+        asset = self.assets.get(url, BeeperApiError("GET /v1/assets/serve -> 500", status=500))
+        if isinstance(asset, Exception):
+            raise asset
+        return asset
 
     async def send_text(self, chat_id, text, *, reply_to=None):
         self._next_id += 1
@@ -245,6 +259,101 @@ async def test_repeated_upserts_dispatch_once(monkeypatch):
     await async_wait_until(lambda: adapter.handle_message.await_count >= 1)
     assert adapter.handle_message.await_count == 1
     await adapter.disconnect()
+
+
+# --- incoming photos ----------------------------------------------------------------------
+
+PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64
+PHOTO_URL = "mxc://local.beeper.com/photo1"
+ALWAYS = {"101": {"label": "notes", "mode": "always"}}
+
+
+def _photo(msg_id, *, caption="", url=PHOTO_URL, **attachment):
+    att = {"id": url, "srcURL": url, "type": "img", "mimeType": "image/png", "fileName": "../../../etc/cron.d/x.png",
+           "fileSize": len(PNG), "isSticker": False, **attachment}
+    return _msg(msg_id, text=caption, type="IMAGE", attachments=[att])
+
+
+async def _one_event(monkeypatch, message, *, assets=None, **extra):
+    client = FakeClient()
+    client.assets.update({PHOTO_URL: PNG} if assets is None else assets)
+    adapter, _, sock = await _connected(monkeypatch, client=client, **extra)
+    await _upsert(adapter, sock, 1, message)
+    await async_wait_until(lambda: adapter.handle_message.await_count == 1)
+    (event,) = _dispatched(adapter)
+    await adapter.disconnect()
+    return event, client
+
+
+@pytest.mark.asyncio
+async def test_a_photo_alone_wakes_an_always_chat_and_reaches_the_agent_as_a_private_file(monkeypatch):
+    event, client = await _one_event(monkeypatch, _photo(100), chats=ALWAYS)
+    assert (event.text, event.message_type, event.media_types) == ("", MessageType.PHOTO, ["image/png"])
+    (path,) = event.media_urls
+    cache = (Path(os.environ["HERMES_HOME"]) / "cache" / "images").resolve()
+    assert Path(path).resolve().parent == cache, "the sender's file name must never shape the path"
+    assert Path(path).read_bytes() == PNG
+    assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
+    assert client.downloads == [(PHOTO_URL, 20 * 1024 * 1024)]
+
+
+@pytest.mark.asyncio
+async def test_a_photo_captioned_with_the_trigger_works_in_prefix_mode(monkeypatch):
+    event, _ = await _one_event(monkeypatch, _photo(100, caption="!agent use this for the post"))
+    assert (event.text, event.message_type, len(event.media_urls)) == ("use this for the post", MessageType.PHOTO, 1)
+
+
+@pytest.mark.asyncio
+async def test_a_photo_without_the_trigger_is_not_downloaded_in_prefix_mode(monkeypatch):
+    client = FakeClient()
+    client.assets[PHOTO_URL] = PNG
+    adapter, _, sock = await _connected(monkeypatch, client=client)
+    await _upsert(adapter, sock, 1, _photo(100, caption="look"))
+    assert adapter.handle_message.await_count == 0
+    assert client.downloads == []
+    await adapter.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_a_failed_download_falls_back_to_the_placeholder_and_warns(monkeypatch, caplog):
+    with caplog.at_level(logging.WARNING):
+        event, _ = await _one_event(monkeypatch, _photo(100, caption="!agent this one"), assets={})
+    assert (event.text, event.message_type, event.media_urls) == ("[attachment: image] this one", MessageType.TEXT, [])
+    assert "could not pass a photo" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_bytes_that_are_not_an_image_are_not_cached(monkeypatch):
+    event, _ = await _one_event(monkeypatch, _photo(100), assets={PHOTO_URL: b"<html>error</html>"}, chats=ALWAYS)
+    assert (event.text, event.media_urls) == ("[attachment: image]", [])
+    assert not list((Path(os.environ["HERMES_HOME"]) / "cache" / "images").glob("*"))
+
+
+@pytest.mark.asyncio
+async def test_a_photo_over_the_size_cap_is_not_downloaded(monkeypatch):
+    event, client = await _one_event(monkeypatch, _photo(100, fileSize=3 * 1024 * 1024), chats=ALWAYS, max_image_mb=2)
+    assert (event.text, event.media_urls, client.downloads) == ("[attachment: image]", [], [])
+
+
+@pytest.mark.asyncio
+async def test_the_size_cap_is_passed_to_the_download(monkeypatch):
+    _, client = await _one_event(monkeypatch, _photo(100, fileSize=None), chats=ALWAYS, max_image_mb=2)
+    assert client.downloads == [(PHOTO_URL, 2 * 1024 * 1024)]
+
+
+@pytest.mark.parametrize("attachment", [{"isSticker": True}, {"type": "video", "mimeType": "video/mp4"},
+                                        {"mimeType": "application/pdf"}])
+@pytest.mark.asyncio
+async def test_stickers_and_other_files_keep_the_placeholder(monkeypatch, attachment):
+    event, client = await _one_event(monkeypatch, _photo(100, **attachment), chats=ALWAYS)
+    assert (event.media_urls, client.downloads) == ([], [])
+    assert event.text.startswith("[attachment: ")
+
+
+@pytest.mark.asyncio
+async def test_photo_downloads_can_be_turned_off(monkeypatch):
+    event, client = await _one_event(monkeypatch, _photo(100), chats=ALWAYS, download_images=False)
+    assert (event.text, event.media_urls, client.downloads) == ("[attachment: image]", [], [])
 
 
 # --- outbound -----------------------------------------------------------------------------

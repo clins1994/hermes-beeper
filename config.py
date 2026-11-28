@@ -17,6 +17,7 @@ DEFAULT_TRIGGER = "!hermes"
 DEFAULT_REPLY_MARKER = "🤖 "
 SELF_INVOKER = "self"
 ANY_INVOKER = "*"
+DEFAULT_MAX_IMAGE_MB = 20
 
 ChatMode = Literal["prefix", "always"]
 _MODES: tuple[ChatMode, ...] = ("prefix", "always")
@@ -64,6 +65,8 @@ class BeeperSettings:
     max_backfill_age_seconds: float
     rate_limits: RateLimits
     chats: tuple[ChatRule, ...]
+    download_images: bool = True
+    max_image_bytes: int = DEFAULT_MAX_IMAGE_MB * 1024 * 1024
 
 
 def _str(extra: Mapping[str, Any], key: str, default: str) -> str:
@@ -187,4 +190,6 @@ def parse_settings(extra: Mapping[str, Any]) -> BeeperSettings:
         max_backfill_age_seconds=_positive(extra.get("max_backfill_age_seconds", 600), "max_backfill_age_seconds"),
         rate_limits=_rate_limits(extra.get("rate_limit")),
         chats=tuple(_chat_rule(k, v, trigger) for k, v in raw_chats.items()),
+        download_images=_bool(extra.get("download_images", True), "download_images"),
+        max_image_bytes=int(_positive(extra.get("max_image_mb", DEFAULT_MAX_IMAGE_MB), "max_image_mb") * 1024 * 1024),
     )

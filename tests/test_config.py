@@ -19,6 +19,13 @@ def test_empty_config_activates_no_chat():
     assert settings.trigger == DEFAULT_TRIGGER
     assert settings.reply_marker == DEFAULT_REPLY_MARKER
     assert settings.dry_run is False
+    assert settings.download_images is True
+    assert settings.max_image_bytes == 20 * 1024 * 1024
+
+
+def test_photo_settings():
+    settings = parse_settings({"download_images": False, "max_image_mb": 5})
+    assert (settings.download_images, settings.max_image_bytes) == (False, 5 * 1024 * 1024)
 
 
 def test_chat_defaults_to_prefix_mode_and_owner_only():
@@ -54,6 +61,8 @@ def test_wildcard_invoker_admits_everyone_in_that_chat():
     ({"chats": ["x"]}, "chats must be a mapping"),
     ({"dry_run": "maybe"}, "dry_run must be true or false"),
     ({"rate_limit": {"per_chat_seconds": 0}}, "per_chat_seconds must be greater than 0"),
+    ({"max_image_mb": 0}, "max_image_mb must be greater than 0"),
+    ({"download_images": "sometimes"}, "download_images must be true or false"),
 ])
 def test_invalid_settings_fail_loudly(extra, fragment):
     with pytest.raises(BeeperConfigError, match=fragment):

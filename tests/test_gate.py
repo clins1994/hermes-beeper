@@ -87,7 +87,28 @@ def test_non_content_types_never_wake_the_agent(msg_type, make_message):
 
 def test_media_gets_a_placeholder(make_message):
     decision = _gate().evaluate(make_message(type="IMAGE", text="", attachments=[{}]), _rule(mode="always"))
-    assert decision == Admit(text="[attachment: image]")
+    assert decision == Admit(text="", placeholder="[attachment: image]")
+    assert decision.with_placeholder() == "[attachment: image]"
+
+
+def test_a_photo_captioned_with_the_trigger_is_admitted_in_prefix_mode(make_message):
+    decision = _gate().evaluate(make_message(type="IMAGE", text="!agent use this for the post"), _rule())
+    assert decision == Admit(text="use this for the post", placeholder="[attachment: image]")
+    assert decision.with_placeholder() == "[attachment: image] use this for the post"
+
+
+def test_a_photo_with_only_the_trigger_is_admitted(make_message):
+    assert _gate().evaluate(make_message(type="IMAGE", text="!agent"), _rule()) == Admit(
+        text="", placeholder="[attachment: image]")
+
+
+@pytest.mark.parametrize("caption", ["", "nice light today"])
+def test_a_photo_without_the_trigger_is_ignored_in_prefix_mode(caption, make_message):
+    assert _gate().evaluate(make_message(type="IMAGE", text=caption), _rule()) is Drop.NO_TRIGGER
+
+
+def test_an_empty_text_message_still_does_not_wake_the_agent(make_message):
+    assert _gate().evaluate(make_message(text="  "), _rule(mode="always")) is Drop.EMPTY
 
 
 def test_breaker_pauses_a_chat_after_too_many_replies(make_message):

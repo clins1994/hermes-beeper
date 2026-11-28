@@ -1,8 +1,11 @@
-"""Outbound text: the send endpoint parses Markdown, so replies are escaped to arrive as written."""
+"""Outbound text: the send endpoint parses Markdown, so replies are escaped to arrive as written.
+Media downloads: only Beeper media URLs, streamed under a size cap."""
 
 import re
 
-from beeper_platform.client import literal_text
+import httpx
+import pytest
+from beeper_platform.client import BeeperApiError, BeeperClient, literal_text
 
 # What a CommonMark parser does with backslash escapes: drop the backslash before ASCII punctuation.
 _UNESCAPE = re.compile(r"\\([!-/:-@\[-`{-~])")
@@ -35,3 +38,67 @@ def test_plain_text_and_non_ascii_pass_through() -> None:
 
 def test_a_fence_in_the_middle_of_a_line_is_not_a_code_block() -> None:
     assert literal_text("x ```\na\\b\n```") == "x \\`\\`\\`\na\\\\b\n\\`\\`\\`"
+
+
+# --- media downloads ------------------------------------------------------------------------
+
+PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 100
+
+
+def _client(handler) -> tuple[BeeperClient, list[httpx.Request]]:
+    seen: list[httpx.Request] = []
+
+    def _record(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return handler(request)
+    http = httpx.AsyncClient(transport=httpx.MockTransport(_record))
+    return BeeperClient("http://127.0.0.1:23373", "test-token", http=http), seen
+
+
+@pytest.mark.asyncio
+async def test_download_asset_streams_from_the_serve_endpoint() -> None:
+    client, seen = _client(lambda _r: httpx.Response(200, content=PNG))
+    assert await client.download_asset("mxc://local.beeper.com/abc", max_bytes=1024) == PNG
+    (request,) = seen
+    assert (request.method, request.url.path) == ("GET", "/v1/assets/serve")
+    assert request.url.params["url"] == "mxc://local.beeper.com/abc"
+    assert request.headers["authorization"] == "Bearer test-token"
+
+
+@pytest.mark.parametrize("url", ["file:///etc/passwd", "https://example.com/a.png", "/home/user/.ssh/id_rsa", ""])
+@pytest.mark.asyncio
+async def test_download_asset_refuses_anything_but_beeper_media_urls(url) -> None:
+    client, seen = _client(lambda _r: httpx.Response(200, content=PNG))
+    with pytest.raises(BeeperApiError) as exc:
+        await client.download_asset(url, max_bytes=1024)
+    assert exc.value.code == "bad_url"
+    assert seen == []
+
+
+@pytest.mark.asyncio
+async def test_download_asset_rejects_a_declared_size_over_the_cap() -> None:
+    client, _ = _client(lambda _r: httpx.Response(200, content=PNG))  # Content-Length: 108
+    with pytest.raises(BeeperApiError) as exc:
+        await client.download_asset("localmxc://x/y", max_bytes=50)
+    assert exc.value.code == "too_large"
+
+
+@pytest.mark.asyncio
+async def test_download_asset_stops_reading_an_undeclared_stream_past_the_cap() -> None:
+    def _endless(_r):
+        async def body():
+            for _ in range(1000):
+                yield b"x" * 1024
+        return httpx.Response(200, content=body())  # streamed: no Content-Length
+    client, _ = _client(_endless)
+    with pytest.raises(BeeperApiError) as exc:
+        await client.download_asset("mxc://x/y", max_bytes=10 * 1024)
+    assert exc.value.code == "too_large"
+
+
+@pytest.mark.asyncio
+async def test_download_asset_reports_api_errors() -> None:
+    client, _ = _client(lambda _r: httpx.Response(500, json={"message": "ENOENT", "code": "UNKNOWN_ERROR"}))
+    with pytest.raises(BeeperApiError) as exc:
+        await client.download_asset("mxc://x/missing", max_bytes=1024)
+    assert exc.value.status == 500

@@ -29,6 +29,34 @@ class FrameError(ValueError):
 
 
 @dataclass(frozen=True)
+class Attachment:
+    """One entry of a message's ``attachments``. ``src_url`` is the ``mxc://`` / ``localmxc://`` URL that
+    ``GET /v1/assets/serve`` resolves; the file name is display data only and never becomes a path."""
+
+    type: str  # "img", "video", "audio" or "unknown"
+    src_url: str
+    mime_type: str
+    file_size: int | None
+    is_sticker: bool
+
+    @property
+    def is_photo(self) -> bool:
+        """An image the agent can look at: not a sticker, and not declared as anything but ``image/*``."""
+        return self.type == "img" and not self.is_sticker and (not self.mime_type or self.mime_type.startswith("image/"))
+
+    @classmethod
+    def from_api(cls, raw: Mapping[str, Any]) -> Attachment:
+        size = raw.get("fileSize")
+        return cls(
+            type=str(raw.get("type") or "unknown"),
+            src_url=str(raw.get("srcURL") or raw.get("id") or ""),
+            mime_type=str(raw.get("mimeType") or "").split(";")[0].strip().lower(),
+            file_size=int(size) if isinstance(size, (int, float)) and not isinstance(size, bool) else None,
+            is_sticker=raw.get("isSticker") is True,
+        )
+
+
+@dataclass(frozen=True)
 class BeeperMessage:
     """One ``Message`` from ``message.upserted`` entries or ``GET /v1/chats/{id}/messages``.
 
@@ -47,7 +75,7 @@ class BeeperMessage:
     timestamp: datetime | None
     sort_key: str
     reply_to_id: str | None
-    attachment_count: int
+    attachments: tuple[Attachment, ...] = ()
 
     @classmethod
     def from_api(cls, raw: Mapping[str, Any]) -> BeeperMessage | None:
@@ -67,7 +95,8 @@ class BeeperMessage:
             timestamp=_parse_ts(raw.get("timestamp")),
             sort_key=str(raw.get("sortKey") or ""),
             reply_to_id=str(raw["linkedMessageID"]) if raw.get("linkedMessageID") else None,
-            attachment_count=len(attachments) if isinstance(attachments, list) else 0,
+            attachments=tuple(Attachment.from_api(a) for a in attachments if isinstance(a, Mapping))
+            if isinstance(attachments, list) else (),
         )
 
 
