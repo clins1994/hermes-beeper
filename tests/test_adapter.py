@@ -48,6 +48,7 @@ class FakeClient:
         self.reactions: list[tuple[str, str, str, str]] = []
         self.assets: dict[str, bytes | Exception] = {}
         self.downloads: list[tuple[str, int]] = []
+        self.uploads: list[tuple[bytes, str, str]] = []
         self._next_id = 9000
 
     async def whoami(self):
@@ -74,6 +75,15 @@ class FakeClient:
     async def send_text(self, chat_id, text, *, reply_to=None):
         self._next_id += 1
         self.sent.append((chat_id, text, reply_to))
+        return str(self._next_id)
+
+    async def upload_asset(self, data, *, file_name, mime_type):
+        self.uploads.append((data, file_name, mime_type))
+        return f"upload-{len(self.uploads)}"
+
+    async def send_attachment(self, chat_id, upload_id, *, text="", reply_to=None):
+        self._next_id += 1
+        self.sent.append((chat_id, f"{text} [{upload_id}]", reply_to))
         return str(self._next_id)
 
     async def add_reaction(self, chat_id, message_id, key):
@@ -624,4 +634,44 @@ async def test_only_the_owner_can_run_slash_commands(monkeypatch):
     assert not policy_for_runner_source(runner, friend).can_run(friend.user_id, "model")
     assert policy_for_runner_source(runner, friend).can_run(friend.user_id, "help")
     assert policy_for_runner_source(runner, owner).can_run(OWNER, "model")
+    await adapter.disconnect()
+
+
+# --- outbound photos ----------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_send_image_file_uploads_the_photo_with_the_marker_caption_and_ignores_its_echo(monkeypatch, tmp_path):
+    adapter, client, sock = await _connected(monkeypatch)
+    photo = tmp_path / "cover.jpg"
+    photo.write_bytes(b"\xff\xd8jpeg")
+    result = await adapter.send_image_file(NOTES.id, str(photo), caption="Is this crop OK?", reply_to="100")
+    assert result.success
+    assert client.uploads == [(b"\xff\xd8jpeg", "cover.jpg", "image/jpeg")]
+    assert client.sent == [(NOTES.id, "🤖 Is this crop OK? [upload-1]", "100")]
+    await _upsert(adapter, sock, 1, _msg(result.message_id, text="🤖 Is this crop OK?", sort_key=99999))
+    assert adapter.handle_message.await_count == 0
+    await adapter.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_send_image_file_without_a_caption_still_carries_the_marker(monkeypatch, tmp_path):
+    adapter, client, _ = await _connected(monkeypatch)
+    photo = tmp_path / "a.png"
+    photo.write_bytes(b"png")
+    assert (await adapter.send_image_file(NOTES.id, str(photo))).success
+    assert client.sent == [(NOTES.id, "🤖 [upload-1]", None)]
+    await adapter.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_send_image_file_refuses_other_chats_and_files_that_are_not_photos(monkeypatch, tmp_path):
+    adapter, client, _ = await _connected(monkeypatch)
+    photo, notes = tmp_path / "a.jpg", tmp_path / "notes.txt"
+    photo.write_bytes(b"jpg")
+    notes.write_text("secret")
+    assert not (await adapter.send_image_file(OTHER, str(photo))).success
+    assert not (await adapter.send_image_file(NOTES.id, str(notes))).success
+    assert not (await adapter.send_image_file(NOTES.id, str(tmp_path / "missing.jpg"))).success
+    assert (client.uploads, client.sent) == ([], [])
     await adapter.disconnect()

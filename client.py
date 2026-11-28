@@ -1,7 +1,7 @@
 """Beeper Desktop API REST client and outbound pacing.
 
 Only the endpoints the platform needs: token check, chat lookup, message pages (backfill), media
-downloads and text sends. Every request carries the Bearer token; the token never appears in errors or logs.
+downloads, photo uploads and sends. Every request carries the Bearer token; the token never appears in errors or logs.
 """
 
 from __future__ import annotations
@@ -22,6 +22,13 @@ from .events import BeeperMessage
 
 _RETRYABLE_STATUS = frozenset({408, 425, 429, 500, 502, 503, 504})
 MEDIA_URL_SCHEMES = ("mxc://", "localmxc://")
+
+
+def _pending_id(data: Any) -> str:
+    pending = data.get("pendingMessageID") if isinstance(data, dict) else None
+    if not pending:
+        raise BeeperApiError("send returned no pendingMessageID", status=200)
+    return str(pending)
 
 
 class BeeperApiError(Exception):
@@ -175,10 +182,26 @@ class BeeperClient:
         if reply_to:
             body["replyToMessageID"] = reply_to
         data = await self._request("POST", f"/v1/chats/{quote(chat_id, safe='')}/messages", json=body)
-        pending = data.get("pendingMessageID") if isinstance(data, dict) else None
-        if not pending:
-            raise BeeperApiError("send returned no pendingMessageID", status=200)
-        return str(pending)
+        return _pending_id(data)
+
+    async def upload_asset(self, data: bytes, *, file_name: str, mime_type: str) -> str:
+        """Upload a temporary file for a send; returns its ``uploadID``."""
+        out = await self._request("POST", "/v1/assets/upload", data={"fileName": file_name, "mimeType": mime_type},
+                                  files={"file": (file_name, data, mime_type)})
+        upload_id = out.get("uploadID") if isinstance(out, dict) else None
+        if not upload_id:
+            raise BeeperApiError("upload returned no uploadID", status=200)
+        return str(upload_id)
+
+    async def send_attachment(self, chat_id: str, upload_id: str, *, text: str = "",
+                              reply_to: str | None = None) -> str:
+        """Send an uploaded file, with ``text`` as its caption; returns the ``pendingMessageID``."""
+        body: dict[str, Any] = {"attachment": {"uploadID": upload_id}}
+        if text:
+            body["text"] = literal_text(text)
+        if reply_to:
+            body["replyToMessageID"] = reply_to
+        return _pending_id(await self._request("POST", f"/v1/chats/{quote(chat_id, safe='')}/messages", json=body))
 
 
     async def add_reaction(self, chat_id: str, message_id: str, reaction_key: str) -> None:

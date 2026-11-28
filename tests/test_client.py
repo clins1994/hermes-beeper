@@ -1,6 +1,7 @@
 """Outbound text: the send endpoint parses Markdown, so replies are escaped to arrive as written.
-Media downloads: only Beeper media URLs, streamed under a size cap."""
+Media downloads: only Beeper media URLs, streamed under a size cap. Photo sends: upload, then send."""
 
+import json
 import re
 
 import httpx
@@ -102,3 +103,20 @@ async def test_download_asset_reports_api_errors() -> None:
     with pytest.raises(BeeperApiError) as exc:
         await client.download_asset("mxc://x/missing", max_bytes=1024)
     assert exc.value.status == 500
+
+
+# --- photo sends ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_upload_then_send_attachment() -> None:
+    def _handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/assets/upload":
+            return httpx.Response(200, json={"uploadID": "up-1"})
+        return httpx.Response(200, json={"chatID": "!c", "pendingMessageID": "77"})
+    client, seen = _client(_handler)
+    assert await client.upload_asset(PNG, file_name="a.png", mime_type="image/png") == "up-1"
+    assert await client.send_attachment("!c:beeper.local", "up-1", text="🤖 hi", reply_to="5") == "77"
+    upload, send = seen
+    assert upload.method == "POST" and b'filename="a.png"' in upload.content and PNG in upload.content
+    assert json.loads(send.content) == {"attachment": {"uploadID": "up-1"}, "text": "🤖 hi", "replyToMessageID": "5"}
